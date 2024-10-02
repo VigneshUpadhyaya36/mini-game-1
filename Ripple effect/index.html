@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ripple Effect</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+    }
+    #navigateButton {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 40px;
+      font-size: 16px;
+      cursor: pointer;
+      z-index: 1;
+      background-color: #000;
+      color: white;
+      border: none;
+      border-radius: 10px;
+    }
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+    }
+  </style>
+</head>
+<body>
+
+<button id="navigateButton">Go to Next Screen</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const fboSize = 1024;
+
+// If you are reading this and you know how to tell
+// whether a browser supports THREE.FloatType without
+// browser sniffing, please let me know!
+const isMobileApple = /(iPad|iPhone).+(like\sMac)/.test(navigator.userAgent);
+
+const getTarget = (texSize) => new THREE.WebGLRenderTarget(texSize, texSize, {
+  format: THREE.RGBAFormat,
+  type: isMobileApple ? THREE.HalfFloatType : THREE.FloatType
+});
+
+const pingpong = (texSize) => {
+  const buffers = [
+    getTarget(texSize),
+    getTarget(texSize)
+  ];
+  
+  let index = 0;
+  const swap = () => index = 1 - index;
+  const read = () => buffers[index];
+  const write = () => buffers[1 - index];
+  
+  return { read, write, swap };
+};
+
+const getFBO = (texSize, simMaterial) => {
+  const fbos = pingpong(texSize);
+  
+  const osCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+  osCamera.position.z = 1;
+  
+  const simGeo = new THREE.BufferGeometry();
+  simGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      -1, -1, 0, 1, -1, 0, 1, 1, 0,
+      -1, -1, 0, 1, 1, 0, -1, 1, 0
+  ]), 3));
+  
+  simGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([
+      0, 0, 1, 0, 1, 1,
+      0, 0, 1, 1, 0, 1
+  ]), 2));
+  
+  const simMesh = new THREE.Mesh(simGeo, simMaterial);
+  const osScene = new THREE.Scene();
+  osScene.add(simMesh);
+  
+  const render = (renderer) => {
+    const read = fbos.read();
+    const write = fbos.write();
+    
+    simMaterial.uniforms.uTex.value = read.texture;
+    renderer.setRenderTarget(write);
+    
+    renderer.render(osScene, osCamera);
+    renderer.setRenderTarget(null);
+    
+    fbos.swap();
+  };
+  
+  const resize = (size) => {
+    target.setSize(size, size);
+  };
+  
+  return { render, resize, fbos };
+};
+
+const renderer = new THREE.WebGLRenderer();
+renderer.setPixelRatio(2);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 1e-5, 100);
+camera.position.z = 1;
+
+const mouseTarget = new THREE.Vector2(0.5, 0.5);
+const mouse = new THREE.Vector3(0.5, 0.5, -5000);
+const resolution = new THREE.Vector2(1, 1);
+
+const loader = new THREE.TextureLoader();
+let texIndex = 0;
+
+const textures = [
+  loader.load("https://assets.codepen.io/1082534/tXtwrPd.jpeg"),
+  loader.load("https://assets.codepen.io/1082534/sduLRvf.jpeg")
+];
+
+textures.forEach((t) => {
+  t.wrapS = THREE.MirroredRepeatWrapping;
+  t.wrapT = THREE.MirroredRepeatWrapping;
+});
+
+const geo = new THREE.PlaneGeometry(1, 1);
+const mat = new THREE.ShaderMaterial({
+  depthTest: false,
+  uniforms: {
+    uTime: { value: 0 },
+    uMouse: { value: mouse },
+    uResolution: { value: resolution },
+    uTex1: { value: null },
+    uTex2: { value: null }
+  },
+  vertexShader: `
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}
+  `,
+  fragmentShader: `
+  
+varying vec2 vUv;
+
+uniform float uTime;
+uniform vec3 uMouse;
+uniform vec2 uResolution;
+
+uniform sampler2D uTex1;
+uniform sampler2D uTex2;
+
+#define PI 3.1415926
+
+void main() {
+  float ar = uResolution.x / uResolution.y;
+  float time = (uTime - uMouse.z) * 0.0005;
+  float centre = distance(vUv * vec2(ar, 1.0), uMouse.xy * vec2(ar, 1.0));
+  float elapsed = clamp(time - centre, 0.0, 1.0);
+  float dist = sin(elapsed * PI);
+  float amp = sin(centre * 30.0 + uTime * -0.01) * dist * (1.0 - elapsed);
+
+  vec4 tex1 = texture2D(uTex1, vUv + amp * 0.2);
+  vec4 tex2 = texture2D(uTex2, vUv + amp * 0.2);
+
+  vec4 col = mix(tex1, tex2, elapsed);
+
+  gl_FragColor = col;
+}
+  `
+});
+
+const swapTextures = () => {
+  texIndex = 1 - texIndex;
+  mat.uniforms.uTex1.value = textures[texIndex];
+  mat.uniforms.uTex2.value = textures[1 - texIndex];
+};
+
+swapTextures();
+
+const plane = new THREE.Mesh(geo, mat);
+scene.add(plane);
+
+const resize = () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  resolution.set(window.innerWidth, window.innerHeight);
+};
+
+resize();
+window.addEventListener('resize', resize);
+
+const fps = 1000 / 500;
+let lastFrame = performance.now();
+const animate = () => {
+  const now = performance.now();
+  const elapsed = now - lastFrame;
+  const frameTime = fps / elapsed;
+  lastFrame = now;
+  
+  mat.uniforms.uTime.value = performance.now();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+};
+
+requestAnimationFrame(animate);
+
+// Handle button click
+document.getElementById('navigateButton').addEventListener('click', () => {
+  mouse.set(0.5, 0.5, performance.now()); // Trigger ripple effect
+  swapTextures();
+});
+</script>
+
+</body>
+</html>
